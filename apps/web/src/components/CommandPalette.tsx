@@ -511,6 +511,13 @@ function OpenCommandPaletteDialog(props: {
 
     return options;
   }, [environments]);
+  const environmentLabelById = useMemo(
+    () =>
+      new Map<EnvironmentId, string>(
+        addProjectEnvironmentOptions.map((option) => [option.environmentId, option.label]),
+      ),
+    [addProjectEnvironmentOptions],
+  );
   const defaultAddProjectEnvironmentId = addProjectEnvironmentOptions[0]?.environmentId ?? null;
   const wslAddProjectEnvironmentOption = useMemo(
     () =>
@@ -589,6 +596,19 @@ function OpenCommandPaletteDialog(props: {
     () => new Map<ProjectId, string>(projects.map((project) => [project.id, project.title])),
     [projects],
   );
+  const describeProjectWithEnvironment = useCallback(
+    (project: (typeof projects)[number]) => {
+      const environmentLabel = environmentLabelById.get(project.environmentId);
+      return environmentLabel
+        ? `${environmentLabel} · ${project.workspaceRoot}`
+        : project.workspaceRoot;
+    },
+    [environmentLabelById],
+  );
+  const getProjectEnvironmentSearchTerms = useCallback(
+    (project: (typeof projects)[number]) => [environmentLabelById.get(project.environmentId) ?? ""],
+    [environmentLabelById],
+  );
 
   const activeThreadId = activeThread?.id;
   const currentProjectEnvironmentId =
@@ -662,9 +682,16 @@ function OpenCommandPaletteDialog(props: {
             className={ITEM_ICON_CLASS}
           />
         ),
+        description: describeProjectWithEnvironment,
+        additionalSearchTerms: getProjectEnvironmentSearchTerms,
         runProject: openProjectFromSearch,
       }),
-    [openProjectFromSearch, projects],
+    [
+      describeProjectWithEnvironment,
+      getProjectEnvironmentSearchTerms,
+      openProjectFromSearch,
+      projects,
+    ],
   );
 
   const projectThreadItems = useMemo(
@@ -680,6 +707,8 @@ function OpenCommandPaletteDialog(props: {
             className={ITEM_ICON_CLASS}
           />
         ),
+        description: describeProjectWithEnvironment,
+        additionalSearchTerms: getProjectEnvironmentSearchTerms,
         runProject: async (project) => {
           await startNewThreadInProjectFromContext(
             {
@@ -692,7 +721,15 @@ function OpenCommandPaletteDialog(props: {
           );
         },
       }),
-    [activeDraftThread, activeThread, defaultProjectRef, handleNewThread, projects],
+    [
+      activeDraftThread,
+      activeThread,
+      defaultProjectRef,
+      describeProjectWithEnvironment,
+      getProjectEnvironmentSearchTerms,
+      handleNewThread,
+      projects,
+    ],
   );
 
   const allThreadItems = useMemo(

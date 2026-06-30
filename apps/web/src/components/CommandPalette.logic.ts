@@ -94,15 +94,21 @@ export function buildProjectActionItems(input: {
   projects: ReadonlyArray<Project>;
   valuePrefix: string;
   icon: (project: Project) => ReactNode;
+  description?: (project: Project) => string;
+  additionalSearchTerms?: (project: Project) => ReadonlyArray<string>;
   runProject: (project: Project) => Promise<void>;
   shortcutCommand?: KeybindingCommand;
 }): CommandPaletteActionItem[] {
   return input.projects.map((project) => ({
     kind: "action",
     value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
-    searchTerms: [project.title, project.workspaceRoot],
+    searchTerms: [
+      project.title,
+      project.workspaceRoot,
+      ...(input.additionalSearchTerms?.(project) ?? []),
+    ],
     title: project.title,
-    description: project.workspaceRoot,
+    description: input.description?.(project) ?? project.workspaceRoot,
     icon: input.icon(project),
     ...(input.shortcutCommand !== undefined ? { shortcutCommand: input.shortcutCommand } : {}),
     run: async () => {

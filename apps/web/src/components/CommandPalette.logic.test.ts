@@ -2,13 +2,30 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import type { Thread } from "../types";
 import {
+  buildProjectActionItems,
   buildThreadActionItems,
   filterCommandPaletteGroups,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
+import type { Project } from "../types";
 
 const LOCAL_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const PROJECT_ID = ProjectId.make("project-1");
+
+function makeProject(overrides: Partial<Project> = {}): Project {
+  return {
+    id: PROJECT_ID,
+    environmentId: LOCAL_ENVIRONMENT_ID,
+    title: "Project",
+    workspaceRoot: "/repo/project",
+    repositoryIdentity: null,
+    defaultModelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+    scripts: [],
+    createdAt: "2026-03-01T00:00:00.000Z",
+    updatedAt: "2026-03-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
@@ -34,6 +51,34 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     ...overrides,
   };
 }
+
+describe("buildProjectActionItems", () => {
+  it("includes caller-provided project descriptions and search terms", () => {
+    const items = buildProjectActionItems({
+      projects: [makeProject({ title: "PC", workspaceRoot: "/Users/vrtak-cz/Code/Temp/PC" })],
+      valuePrefix: "new-thread-in",
+      icon: () => null,
+      description: (project) => `This device · ${project.workspaceRoot}`,
+      additionalSearchTerms: () => ["This device"],
+      runProject: async () => undefined,
+    });
+
+    expect(items[0]?.description).toBe("This device · /Users/vrtak-cz/Code/Temp/PC");
+
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [{ value: "projects", label: "Projects", items }],
+      query: "this device",
+      isInSubmenu: true,
+      projectSearchItems: [],
+      threadSearchItems: [],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.items.map((item) => item.value)).toEqual([
+      "new-thread-in:environment-local:project-1",
+    ]);
+  });
+});
 
 describe("buildThreadActionItems", () => {
   it("orders threads by most recent activity and formats timestamps from updatedAt", () => {
