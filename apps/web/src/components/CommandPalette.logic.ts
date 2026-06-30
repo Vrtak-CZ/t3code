@@ -90,17 +90,21 @@ export function normalizeSearchText(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+type CommandPaletteProject = Project & {
+  readonly environmentName?: string | null;
+};
+
 export function buildProjectActionItems(input: {
-  projects: ReadonlyArray<Project>;
+  projects: ReadonlyArray<CommandPaletteProject>;
   valuePrefix: string;
-  icon: (project: Project) => ReactNode;
-  runProject: (project: Project) => Promise<void>;
+  icon: (project: CommandPaletteProject) => ReactNode;
+  runProject: (project: CommandPaletteProject) => Promise<void>;
   shortcutCommand?: KeybindingCommand;
 }): CommandPaletteActionItem[] {
   return input.projects.map((project) => ({
     kind: "action",
     value: `${input.valuePrefix}:${project.environmentId}:${project.id}`,
-    searchTerms: [project.title, project.workspaceRoot],
+    searchTerms: [project.title, project.workspaceRoot, project.environmentName ?? ""],
     title: project.title,
     description: project.workspaceRoot,
     icon: input.icon(project),

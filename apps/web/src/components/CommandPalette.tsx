@@ -511,6 +511,13 @@ function OpenCommandPaletteDialog(props: {
 
     return options;
   }, [environments]);
+  const environmentLabelById = useMemo(
+    () =>
+      new Map<EnvironmentId, string>(
+        addProjectEnvironmentOptions.map((option) => [option.environmentId, option.label]),
+      ),
+    [addProjectEnvironmentOptions],
+  );
   const defaultAddProjectEnvironmentId = addProjectEnvironmentOptions[0]?.environmentId ?? null;
   const wslAddProjectEnvironmentOption = useMemo(
     () =>
@@ -589,6 +596,14 @@ function OpenCommandPaletteDialog(props: {
     () => new Map<ProjectId, string>(projects.map((project) => [project.id, project.title])),
     [projects],
   );
+  const projectsWithEnvironmentName = useMemo(
+    () =>
+      projects.map((project) => ({
+        ...project,
+        environmentName: environmentLabelById.get(project.environmentId) ?? "",
+      })),
+    [environmentLabelById, projects],
+  );
 
   const activeThreadId = activeThread?.id;
   const currentProjectEnvironmentId =
@@ -653,7 +668,7 @@ function OpenCommandPaletteDialog(props: {
   const projectSearchItems = useMemo(
     () =>
       buildProjectActionItems({
-        projects,
+        projects: projectsWithEnvironmentName,
         valuePrefix: "project",
         icon: (project) => (
           <ProjectFavicon
@@ -664,13 +679,13 @@ function OpenCommandPaletteDialog(props: {
         ),
         runProject: openProjectFromSearch,
       }),
-    [openProjectFromSearch, projects],
+    [openProjectFromSearch, projectsWithEnvironmentName],
   );
 
   const projectThreadItems = useMemo(
     () =>
       buildProjectActionItems({
-        projects,
+        projects: projectsWithEnvironmentName,
         valuePrefix: "new-thread-in",
         shortcutCommand: "chat.new",
         icon: (project) => (
@@ -692,7 +707,13 @@ function OpenCommandPaletteDialog(props: {
           );
         },
       }),
-    [activeDraftThread, activeThread, defaultProjectRef, handleNewThread, projects],
+    [
+      activeDraftThread,
+      activeThread,
+      defaultProjectRef,
+      handleNewThread,
+      projectsWithEnvironmentName,
+    ],
   );
 
   const allThreadItems = useMemo(
