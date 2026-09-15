@@ -2093,6 +2093,14 @@ const make = Effect.gen(function* () {
           workspaceCwd &&
           (yield* checkpointStore.isGitRepository(workspaceCwd))
         ) {
+          // Repository detection runs off the lifecycle worker and can return
+          // long after the turn ended. The placeholder only marks work in
+          // progress; a late one would rewrite the settled turn's state and
+          // move the latest-turn pointer back, so drop it once the turn is over.
+          const turn = yield* projectionTurnRepository.getByTurnId({ threadId: thread.id, turnId });
+          if (Option.isSome(turn) && turn.value.state !== "running") {
+            return;
+          }
           // Skip if a checkpoint already exists for this turn. A real
           // (non-placeholder) capture from CheckpointReactor should not
           // be clobbered, and dispatching a duplicate placeholder for the

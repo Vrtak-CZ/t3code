@@ -43,6 +43,8 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -415,6 +417,12 @@ describe("ProviderRuntimeIngestion", () => {
       engine,
       dispatch,
       readModel: () => testRuntime.runPromise(snapshotQuery.getSnapshot()),
+      readTurn: (turnId: TurnId) =>
+        testRuntime.runPromise(
+          Effect.flatMap(ProjectionTurnRepository, (turns) =>
+            turns.getByTurnId({ threadId: asThreadId("thread-1"), turnId }),
+          ).pipe(Effect.map(Option.getOrUndefined), Effect.provide(ProjectionTurnRepositoryLive)),
+        ),
       readThreadShell: () =>
         testRuntime.runPromise(
           snapshotQuery
@@ -3796,7 +3804,7 @@ describe("ProviderRuntimeIngestion", () => {
           (event) =>
             event.type === "thread.session-set" &&
             event.payload.threadId === base.threadId &&
-            event.payload.session.status === "ready",
+            event.payload.session.status === "error",
         ),
         Stream.runHead,
         Effect.forkScoped({ startImmediately: true }),
@@ -3812,24 +3820,49 @@ describe("ProviderRuntimeIngestion", () => {
         ...base,
         type: "turn.completed",
         eventId: asEventId("evt-blocked-turn-completed"),
-        payload: { state: "completed" },
+        payload: { state: "failed" },
       });
       // Resolves only if turn.completed is processed while detection is still blocked.
       yield* Fiber.join(settled);
       const blocked = yield* Effect.promise(harness.readModel);
-      expect(blocked.threads[0]?.session).toMatchObject({ status: "ready", activeTurnId: null });
+      expect(blocked.threads[0]?.session).toMatchObject({ status: "error", activeTurnId: null });
       expect(blocked.threads[0]?.messages).toEqual(
         expect.arrayContaining([expect.objectContaining({ text: "Work finished." })]),
       );
       expect(blocked.threads[0]?.checkpoints).toEqual([]);
 
+      // A newer turn starts before detection returns. The late placeholder
+      // must neither settle the failed turn as completed nor move the
+      // latest-turn pointer back to it.
+      const nextTurnId = asTurnId("next-turn");
+      const nextTurnStarted = yield* harness.engine.streamDomainEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "thread.session-set" &&
+            event.payload.session.activeTurnId === nextTurnId,
+        ),
+        Stream.runHead,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      harness.emit({
+        ...base,
+        type: "turn.started",
+        turnId: nextTurnId,
+        eventId: asEventId("evt-next-turn-start"),
+      });
+      yield* Fiber.join(nextTurnStarted);
       yield* Deferred.succeed(releaseDetection, true);
       yield* Effect.promise(harness.drain);
       const released = yield* Effect.promise(harness.readModel);
-      expect(released.threads[0]?.checkpoints).toEqual([
-        expect.objectContaining({ turnId: "blocked-diff-turn", status: "missing" }),
-      ]);
-      expect(released.threads[0]?.session?.status).toBe("ready");
+      expect(released.threads[0]?.checkpoints).toEqual([]);
+      expect(released.threads[0]?.latestTurn).toMatchObject({
+        turnId: nextTurnId,
+        state: "running",
+      });
+      expect(yield* Effect.promise(() => harness.readTurn(base.turnId))).toMatchObject({
+        state: "error",
+        checkpointRef: null,
+      });
     }),
   );
 
