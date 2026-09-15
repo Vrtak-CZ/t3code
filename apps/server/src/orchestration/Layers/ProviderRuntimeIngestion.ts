@@ -2287,12 +2287,20 @@ const make = Effect.gen(function* () {
     );
 
   const worker = yield* makeDrainableWorker(processInputSafely);
+  // Diff bookkeeping detects the Git repository through VCS subprocesses,
+  // which can stall behind slow or hung git. Keep it off the worker that
+  // persists messages and settles turns so a stuck diff never blocks
+  // turn.completed.
+  const diffWorker = yield* makeDrainableWorker(processInputSafely);
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
       yield* forkParked(
         Stream.runForEach(providerService.streamEvents, (event) =>
-          worker.enqueue({ source: "runtime", event }),
+          (event.type === "turn.diff.updated" ? diffWorker : worker).enqueue({
+            source: "runtime",
+            event,
+          }),
         ),
       );
       yield* forkParked(
@@ -2307,7 +2315,7 @@ const make = Effect.gen(function* () {
 
   return {
     start,
-    drain: worker.drain,
+    drain: worker.drain.pipe(Effect.andThen(diffWorker.drain)),
   } satisfies ProviderRuntimeIngestionShape;
 });
 
