@@ -29,6 +29,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
@@ -264,6 +265,7 @@ describe("ProviderRuntimeIngestion", () => {
     serverSettings?: Partial<ServerSettings>;
     threadTitle?: string;
     workspaceSubdirectory?: string;
+    isGitRepository?: CheckpointStore.CheckpointStore["Service"]["isGitRepository"];
   }) {
     const repositoryRoot = makeTempDir("t3-provider-project-");
     NodeChildProcess.execFileSync("git", ["init", "--initial-branch=main"], {
@@ -307,7 +309,15 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
-      Layer.provideMerge(CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer))),
+      Layer.provideMerge(
+        Layer.effect(
+          CheckpointStore.CheckpointStore,
+          Effect.map(CheckpointStore.CheckpointStore, (store) => ({
+            ...store,
+            isGitRepository: options?.isGitRepository ?? store.isGitRepository,
+          })),
+        ).pipe(Layer.provide(CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer)))),
+      ),
       Layer.provideMerge(VcsProcess.layer),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
@@ -3530,6 +3540,83 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
   });
+
+  effectIt.effect(
+    "persists the final reply and settles while repository detection is blocked",
+    () =>
+      Effect.gen(function* () {
+        const detectionStarted = yield* Deferred.make<void>();
+        const releaseDetection = yield* Deferred.make<boolean>();
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            isGitRepository: () =>
+              Deferred.succeed(detectionStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseDetection)),
+              ),
+          }),
+        );
+        yield* Effect.addFinalizer(() => Deferred.succeed(releaseDetection, true));
+        const base = {
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("blocked-diff-turn"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+        };
+        yield* Effect.promise(() =>
+          harness.emitAndDrain([
+            { ...base, type: "turn.started", eventId: asEventId("evt-blocked-turn-start") },
+          ]),
+        );
+        harness.emit({
+          ...base,
+          type: "turn.diff.updated",
+          eventId: asEventId("evt-blocked-diff"),
+          payload: { unifiedDiff: "diff --git a/file.ts b/file.ts\n+new\n" },
+        });
+        yield* Deferred.await(detectionStarted);
+
+        const settled = yield* harness.engine.streamDomainEvents.pipe(
+          Stream.filter(
+            (event) =>
+              event.type === "thread.session-set" &&
+              event.payload.threadId === base.threadId &&
+              event.payload.session.status === "ready",
+          ),
+          Stream.runHead,
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        harness.emit({
+          ...base,
+          type: "item.completed",
+          eventId: asEventId("evt-blocked-final-reply"),
+          itemId: asItemId("blocked-final-reply"),
+          payload: { itemType: "assistant_message", status: "completed", detail: "Work finished." },
+        });
+        harness.emit({
+          ...base,
+          type: "turn.completed",
+          eventId: asEventId("evt-blocked-turn-completed"),
+          payload: { state: "completed" },
+        });
+        yield* Fiber.join(settled);
+        const beforeRelease = yield* Effect.promise(harness.readModel);
+        expect(beforeRelease.threads[0]?.session).toMatchObject({
+          status: "ready",
+          activeTurnId: null,
+        });
+        expect(beforeRelease.threads[0]?.messages).toEqual(
+          expect.arrayContaining([expect.objectContaining({ text: "Work finished." })]),
+        );
+        expect(beforeRelease.threads[0]?.checkpoints).toEqual([]);
+
+        yield* Deferred.succeed(releaseDetection, true);
+        yield* Effect.promise(harness.drain);
+        const afterRelease = yield* Effect.promise(harness.readModel);
+        expect(afterRelease.threads[0]?.checkpoints).toEqual([]);
+        expect(afterRelease.threads[0]?.latestTurn).toEqual(beforeRelease.threads[0]?.latestTurn);
+        expect(afterRelease.threads[0]?.session?.status).toBe("ready");
+      }),
+  );
 
   effectIt.effect("tracks provider diff updates from a nested Git workspace", () =>
     Effect.gen(function* () {

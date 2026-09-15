@@ -149,6 +149,7 @@ export class ProcessRunner extends Context.Service<
 
 const DEFAULT_TIMEOUT = "60 seconds";
 const DEFAULT_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+const FORCE_KILL_AFTER = "1 second";
 
 const WINDOWS_COMMAND_NOT_FOUND_PATTERNS = [
   /is not recognized as an internal or external command/i,
@@ -311,6 +312,7 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
             }
           : {}),
         shell: spawnCommand.shell,
+        forceKillAfter: FORCE_KILL_AFTER,
       }),
     )
     .pipe(

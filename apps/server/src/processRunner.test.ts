@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -367,6 +368,44 @@ describe("runProcess", () => {
       });
       expect(error.message).toBe("Process 'fake' in '/actual' timed out after 50ms");
     }),
+  );
+
+  it.effect("force-kills a timed-out child that ignores SIGTERM", (context) =>
+    Effect.gen(function* () {
+      if ((yield* HostProcessPlatform) === "win32") {
+        return context.skip();
+      }
+      const native = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const ready = yield* Deferred.make<ChildProcessSpawner.ChildProcessHandle>();
+      const spawner = ChildProcessSpawner.make((command) =>
+        native.spawn(command).pipe(
+          Effect.map((handle) =>
+            ChildProcessSpawner.makeHandle({
+              ...handle,
+              stdout: handle.stdout.pipe(Stream.tap(() => Deferred.succeed(ready, handle))),
+            }),
+          ),
+        ),
+      );
+      const result = yield* runWith(spawner)({
+        command: process.execPath,
+        args: [
+          "-e",
+          "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setInterval(() => {}, 1000);",
+        ],
+        timeout: "1 second",
+      }).pipe(Effect.flip, Effect.forkScoped);
+      const child = yield* Deferred.await(ready);
+      // Registered after the fork so a failed assertion also cleans up the child.
+      yield* Effect.addFinalizer(() => child.kill({ killSignal: "SIGKILL" }).pipe(Effect.ignore));
+
+      yield* TestClock.adjust("2 seconds");
+      expect(yield* Fiber.join(result)).toMatchObject({
+        _tag: "ProcessTimeoutError",
+        timeoutMs: 1000,
+      });
+      expect(yield* child.isRunning).toBe(false);
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("returns a synthetic timed out result when timeoutBehavior is timedOutResult", () =>

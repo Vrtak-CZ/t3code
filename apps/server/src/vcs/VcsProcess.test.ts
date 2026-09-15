@@ -50,6 +50,59 @@ const captureProcessResult = (
   );
 
 describe("VcsProcess.run", () => {
+  it.effect.each([
+    { command: "glab", slots: 8, queuedCommand: "git" },
+    { command: "gh", slots: 4, queuedCommand: "gh" },
+  ])("times out while waiting for $command process slots", ({ command, slots, queuedCommand }) =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>();
+      const started = yield* Queue.unbounded<void>();
+      const service = yield* VcsProcess.make.pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, {
+          run: () =>
+            Effect.gen(function* () {
+              yield* Queue.offer(started, undefined);
+              yield* Deferred.await(release);
+              return {
+                stdout: "",
+                stderr: "",
+                code: ChildProcessSpawner.ExitCode(0),
+                timedOut: false,
+                stdoutTruncated: false,
+                stderrTruncated: false,
+                stdoutInvalidUtf8: false,
+                stderrInvalidUtf8: false,
+              };
+            }),
+        }),
+      );
+      const holders = yield* Effect.all(
+        Array.from({ length: slots }, () => service.run({ ...baseInput, command })),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      for (let index = 0; index < slots; index++) {
+        yield* Queue.take(started);
+      }
+
+      const queued = yield* service
+        .run({ ...baseInput, command: queuedCommand, timeoutMs: 50 })
+        .pipe(Effect.flip, Effect.forkChild);
+      yield* TestClock.adjust(50);
+      expect(yield* Fiber.join(queued)).toMatchObject({
+        _tag: "VcsProcessTimeoutError",
+        operation: baseInput.operation,
+        command: queuedCommand,
+        timeoutMs: 50,
+      });
+      expect(yield* Queue.size(started)).toBe(0);
+
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holders);
+      yield* service.run({ ...baseInput, command: queuedCommand });
+      expect(yield* Queue.size(started)).toBe(1);
+    }),
+  );
+
   it.effect("bounds a synthetic burst of GitHub API processes", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();

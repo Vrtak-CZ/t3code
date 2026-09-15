@@ -189,7 +189,23 @@ export const make = Effect.gen(function* () {
 
   const run = Effect.fn("VcsProcess.run")(function* (input: VcsProcessInput) {
     const bounded = vcsProcesses.withPermits(1)(runUnbounded(input));
-    return yield* input.command === "gh" ? githubProcesses.withPermits(1)(bounded) : bounded;
+    const execution = input.command === "gh" ? githubProcesses.withPermits(1)(bounded) : bounded;
+    // The deadline includes waiting for a process slot, not just the subprocess.
+    return yield* execution.pipe(
+      Effect.timeoutOrElse({
+        duration: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        orElse: () =>
+          Effect.fail(
+            new VcsProcessTimeoutError({
+              operation: input.operation,
+              command: input.command,
+              cwd: input.cwd,
+              argumentCount: input.args.length,
+              timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+            }),
+          ),
+      }),
+    );
   });
 
   return VcsProcess.of({ run });

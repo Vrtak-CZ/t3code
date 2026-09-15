@@ -1969,11 +1969,21 @@ const make = Effect.gen(function* () {
           workspaceCwd &&
           (yield* checkpointStore.isGitRepository(workspaceCwd))
         ) {
+          // Detection runs independently of lifecycle events. A delayed diff
+          // must not replace a completed turn's message, timestamp, or state.
+          const turn = yield* projectionTurnRepository.getByTurnId({ threadId: thread.id, turnId });
+          if (Option.isSome(turn) && turn.value.state !== "running") {
+            return;
+          }
+          const currentContext = yield* projectionSnapshotQuery
+            .getThreadCheckpointContext(thread.id)
+            .pipe(Effect.map(Option.getOrUndefined));
+          if (!currentContext) return;
           // Skip if a checkpoint already exists for this turn. A real
           // (non-placeholder) capture from CheckpointReactor should not
           // be clobbered, and dispatching a duplicate placeholder for the
           // same turnId would produce an unstable checkpointTurnCount.
-          if (hasCheckpointForTurn(checkpointContext.checkpoints, turnId)) {
+          if (hasCheckpointForTurn(currentContext.checkpoints, turnId)) {
             // Already tracked; no-op.
           } else {
             const assistantMessageId = MessageId.make(
@@ -1989,7 +1999,7 @@ const make = Effect.gen(function* () {
               status: "missing",
               files: [],
               assistantMessageId,
-              checkpointTurnCount: maxCheckpointTurnCount(checkpointContext.checkpoints) + 1,
+              checkpointTurnCount: maxCheckpointTurnCount(currentContext.checkpoints) + 1,
               createdAt: now,
             });
           }
@@ -2163,12 +2173,18 @@ const make = Effect.gen(function* () {
     );
 
   const worker = yield* makeDrainableWorker(processInputSafely);
+  // Repository detection can wait on VCS processes. Keep diff bookkeeping off
+  // the worker that persists messages and settles provider turns.
+  const diffWorker = yield* makeDrainableWorker(processInputSafely);
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
       yield* forkParked(
         Stream.runForEach(providerService.streamEvents, (event) =>
-          worker.enqueue({ source: "runtime", event }),
+          (event.type === "turn.diff.updated" ? diffWorker : worker).enqueue({
+            source: "runtime",
+            event,
+          }),
         ),
       );
       yield* forkParked(
@@ -2183,7 +2199,7 @@ const make = Effect.gen(function* () {
 
   return {
     start,
-    drain: worker.drain,
+    drain: worker.drain.pipe(Effect.andThen(diffWorker.drain)),
   } satisfies ProviderRuntimeIngestionShape;
 });
 
