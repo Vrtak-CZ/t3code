@@ -2601,7 +2601,7 @@ const make = Effect.gen(function* () {
     const turnId = toTurnId(event.turnId);
     if (!thread || !turnId) return;
     const turn = yield* projectionTurnRepository.getByTurnId({ threadId: thread.id, turnId });
-    if (Option.isSome(turn) && turn.value.state !== "running") return;
+    if (Option.isNone(turn) || turn.value.state !== "running") return;
     const checkpointContext = yield* projectionSnapshotQuery
       .getThreadCheckpointContext(thread.id)
       .pipe(Effect.map(Option.getOrUndefined));

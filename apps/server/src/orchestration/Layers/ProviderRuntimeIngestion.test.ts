@@ -4192,6 +4192,43 @@ describe("ProviderRuntimeIngestion", () => {
     }),
   );
 
+  effectIt.effect("ignores a diff for a missing turn without moving the latest turn", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const base = {
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+      yield* Effect.promise(() =>
+        harness.emitAndDrain([
+          {
+            ...base,
+            type: "turn.started",
+            eventId: asEventId("evt-existing-turn"),
+            turnId: asTurnId("current-turn"),
+          },
+          {
+            ...base,
+            type: "turn.diff.updated",
+            eventId: asEventId("evt-missing-turn-diff"),
+            turnId: asTurnId("missing-turn"),
+            payload: { unifiedDiff: "diff --git a/file.ts b/file.ts\n+late\n" },
+          },
+        ]),
+      );
+      const snapshot = yield* Effect.promise(harness.readModel);
+      expect(snapshot.threads[0]?.checkpoints).toEqual([]);
+      expect(snapshot.threads[0]?.latestTurn).toMatchObject({
+        turnId: "current-turn",
+        state: "running",
+      });
+      expect(
+        yield* Effect.promise(() => harness.readTurn(asTurnId("missing-turn"))),
+      ).toBeUndefined();
+    }),
+  );
+
   effectIt.effect("tracks provider diff updates from a nested Git workspace", () =>
     Effect.gen(function* () {
       const harness = yield* Effect.promise(() =>
@@ -4199,6 +4236,14 @@ describe("ProviderRuntimeIngestion", () => {
       );
       yield* Effect.promise(() =>
         harness.emitAndDrain([
+          {
+            type: "turn.started",
+            eventId: asEventId("evt-nested-turn-started"),
+            provider: ProviderDriverKind.make("codex"),
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId("nested-turn"),
+          },
           {
             type: "turn.diff.updated",
             eventId: asEventId("evt-nested-diff"),
@@ -4222,6 +4267,17 @@ describe("ProviderRuntimeIngestion", () => {
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.emitAndDrain([
+      {
+        type: "turn.started",
+        eventId: asEventId("evt-p1-turn-started"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-p1"),
+      },
+    ]);
 
     harness.emit({
       type: "thread.metadata.updated",
