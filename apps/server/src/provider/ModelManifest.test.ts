@@ -9,6 +9,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import {
   applyManifestDefault,
   BUNDLED_MODEL_MANIFEST,
@@ -329,9 +330,14 @@ const httpClientLayer = (handler: () => Response) =>
     HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, handler()))),
   );
 
-const serviceLayers = (input: { readonly prefix: string; readonly response: () => Response }) =>
+const serviceLayers = (input: {
+  readonly prefix: string;
+  readonly response: () => Response;
+  readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
+}) =>
   ServerConfig.layerTest(process.cwd(), { prefix: input.prefix }).pipe(
     Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(ServerSettings.layerTest(input.settings ?? {})),
     Layer.provideMerge(httpClientLayer(input.response)),
   );
 
@@ -516,6 +522,27 @@ describe("ModelManifest service", () => {
       ),
     ),
   );
+
+  it.live("still fetches when provider update checks are disabled", () => {
+    let fetchCount = 0;
+    return Effect.gen(function* () {
+      const service = yield* make;
+      assert.deepStrictEqual(yield* service.refresh, REMOTE_MANIFEST);
+      assert.strictEqual(fetchCount, 1);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        serviceLayers({
+          prefix: "model-manifest-optout-test",
+          response: () => {
+            fetchCount += 1;
+            return Response.json(REMOTE_MANIFEST);
+          },
+          settings: { enableProviderUpdateChecks: false },
+        }),
+      ),
+    );
+  });
 });
 
 it.effect("caches valid compatibility policies and keeps them after a malformed refresh", () => {
